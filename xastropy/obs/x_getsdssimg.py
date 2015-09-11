@@ -31,8 +31,18 @@
 #;------------------------------------------------------------------------------
 
 # Import libraries
+from __future__ import print_function, absolute_import, division#, unicode_literals
+
 import requests
-import PIL
+from cStringIO import StringIO
+
+from astroquery.sdss import SDSS
+
+from astropy.coordinates import SkyCoord
+from astropy import units as u
+
+from xastropy.xutils import xdebug as xdb
+
 
 # Generate the SDSS URL (default is 202" on a side)
 def sdsshttp(ra, dec, imsize, scale=0.39612, grid=None, label=None, invert=None):#, xs, ys):
@@ -44,7 +54,7 @@ def sdsshttp(ra, dec, imsize, scale=0.39612, grid=None, label=None, invert=None)
     #from StringIO import StringIO
 
     # Generate the http call
-    name1='http://skyservice.pha.jhu.edu/DR10/ImgCutout/'
+    name1='http://skyservice.pha.jhu.edu/DR12/ImgCutout/'
     name='getjpeg.aspx?ra='
     
     name+=str(ra) 	#setting the ra
@@ -93,34 +103,78 @@ def dsshttp(ra, dec, imsize):
     
 
 # ##########################################
-def getimg(ra, dec, imsize, BW=None, DSS=None):
+def getimg(ira, idec, imsize, BW=False, DSS=None):
+    ''' Grab an SDSS image from the given URL, if possible
 
+    Parameters:
+    ----------
+    ira: (float or Quantity) RA in decimal degrees
+    idec: (float or Quantity) DEC in decimal degrees
+    '''
+    import PIL
     from PIL import Image
-    from cStringIO import StringIO
-    import x_getsdssimg as xgs
-
+    # Strip units as need be
+    try:
+        ra = ira.value
+    except AttributeError:
+        ra = ira
+        dec = idec
+    else:
+        dec = idec.value
+    
     # Get URL
     if DSS == None:  # Default
-        url = xgs.sdsshttp(ra,dec,imsize)
+        url = sdsshttp(ra,dec,imsize)
     else:
-        url = xgs.dsshttp(ra,dec,imsize) # DSS
+        url = dsshttp(ra,dec,imsize) # DSS
 
     # Request
     rtv = requests.get(url) 
+
+    # Query for photometry
+    coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree)
+    phot = SDSS.query_region(coord, radius=0.02*u.deg)
+
+    if phot is None:
+        print('getimg: Pulling from DSS instead of SDSS')
+        BW = 1
+        url = dsshttp(ra,dec,imsize) # DSS
+        rtv = requests.get(url) 
+
     img = Image.open(StringIO(rtv.content))
 
-    # DEBUG
-    import matplotlib.pyplot as plt
-    import pdb; pdb.set_trace()
-
     # B&W ?
-    if BW != None:
+    if BW:
         import PIL.ImageOps
         img2 = img.convert("L")
         img2 = PIL.ImageOps.invert(img2)
         img = img2
 
+    return img, BW
+
+# ##########################################
+def get_spec_img(ra, dec):
+
+    from PIL import Image
+    from cStringIO import StringIO
+
+    # Coord
+    if hasattr(ra,'unit'):
+        coord = SkyCoord(ra=ra, dec=dec)
+    else:
+        coord = SkyCoord(ra=ra*u.degree, dec=dec*u.degree)
+
+    # Query database
+    radius = 1*u.arcsec
+    spec_catalog = SDSS.query_region(coord,spectro=True, radius=radius.to('degree'))
+
+    # Request
+    url = 'http://skyserver.sdss.org/dr12/en/get/SpecById.ashx?id='+str(int(spec_catalog['specobjid']))
+    rtv = requests.get(url) 
+    img = Image.open(StringIO(rtv.content))
+
     return img
+
 
 # #############
 # Call with RA/DEC (decimal degrees)
